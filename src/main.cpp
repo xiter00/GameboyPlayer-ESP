@@ -177,13 +177,28 @@ bool load_rom() {
 // ---------- setup ----------
 void setup() {
   Serial.begin(115200);
+  delay(500);
+  Serial.println("[1] serial ok");
+
+  Serial.printf("[1a] chip rev: %d, cores: %d\n", ESP.getChipRevision(), ESP.getChipCores());
+  Serial.printf("[1b] free heap: %u bytes\n", ESP.getFreeHeap());
+  Serial.printf("[1c] psram size: %u bytes (0 = PSRAM gagal init)\n", ESP.getPsramSize());
+  Serial.printf("[1d] free psram: %u bytes\n", ESP.getFreePsram());
+
+  Serial.println("[1e] mulai tft.init() sekarang...");
+  Serial.flush();
+  delay(100);
 
   tft.init();
+  Serial.println("[2] tft init ok");
   tft.setRotation(1);
   tft.fillScreen(TFT_BLACK);
+  Serial.println("[3] tft ready");
 
   audio_init();
+  Serial.println("[4] audio init ok");
   joystick_init();
+  Serial.println("[5] joystick init ok");
 
   if (!load_rom()) {
     tft.setCursor(0, 0);
