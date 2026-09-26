@@ -56,11 +56,12 @@ jobs:
             0x0      bootloader.bin \
             0x8000   partitions.bin \
             0x10000  firmware.bin \
-            0x670000 littlefs.bin
+            0xC90000 littlefs.bin
 
-          (Sesuaikan offset littlefs.bin dengan partition table default_16MB.csv
-          kalau ternyata beda -- cek file .pio/build/.../partitions.bin
-          atau jalankan `pio run -t erase` dulu kalau mau flash bersih)
+          (Offset 0xC90000 sesuai partition table default_16MB.csv (skema OTA:
+          app0 0x10000, app1 0x650000, littlefs/spiffs 0xC90000). Kalau custom
+          partition table, cek ulang lewat `pio run -t uploadfs` yang otomatis
+          pakai offset yang bener, atau baca isi partitions.bin-nya langsung)
 
           Alternatif paling gampang: pakai PlatformIO langsung dari project ini:
             pio run -t upload        (flash firmware)

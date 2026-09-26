@@ -226,10 +226,45 @@ void setup() {
     while (1) delay(1000);
   }
 
+  // dump header ROM + itung ulang checksum manual (Pan Docs algorithm)
+  // biar tau pasti byte mana yang gak cocok, bukan tebak-tebak
+  {
+    char title[17] = {0};
+    memcpy(title, &rom[0x134], 16);
+    uint8_t cart_type   = rom[0x147];
+    uint8_t rom_size    = rom[0x148];
+    uint8_t ram_size    = rom[0x149];
+    uint8_t cgb_flag    = rom[0x143];
+    uint8_t stored_sum  = rom[0x14D];
+
+    uint8_t calc_sum = 0;
+    for (uint16_t addr = 0x134; addr <= 0x14C; addr++) {
+      calc_sum = calc_sum - rom[addr] - 1;
+    }
+
+    Serial.println("=== HEADER ROM ===");
+    Serial.printf("  title      : %s\n", title);
+    Serial.printf("  cgb_flag   : 0x%02X\n", cgb_flag);
+    Serial.printf("  cart_type  : 0x%02X\n", cart_type);
+    Serial.printf("  rom_size   : 0x%02X\n", rom_size);
+    Serial.printf("  ram_size   : 0x%02X\n", ram_size);
+    Serial.printf("  checksum stored di file : 0x%02X\n", stored_sum);
+    Serial.printf("  checksum hasil hitung   : 0x%02X %s\n", calc_sum,
+                  (calc_sum == stored_sum) ? "(COCOK)" : "(BEDA -- ROM rusak/gak lengkap)");
+    Serial.println("==================");
+  }
+
   enum gb_init_error_e ret = gb_init(&gb, &gb_rom_read, &gb_cart_ram_read,
                                       &gb_cart_ram_write, &gb_error, NULL);
   if (ret != GB_INIT_NO_ERROR) {
-    Serial.printf("GB init gagal: %d\n", ret);
+    Serial.printf("GB init gagal, kode: %d -> ", ret);
+    if (ret == GB_INIT_CARTRIDGE_UNSUPPORTED) {
+      Serial.println("GB_INIT_CARTRIDGE_UNSUPPORTED (mapper/cart type ROM ini gak didukung Peanut-GB)");
+    } else if (ret == GB_INIT_INVALID_CHECKSUM) {
+      Serial.println("GB_INIT_INVALID_CHECKSUM (checksum header gak cocok, liat dump di atas)");
+    } else {
+      Serial.println("(kode gak dikenal di error handler ini)");
+    }
     tft.setCursor(0, 0);
     tft.setTextColor(TFT_RED);
     tft.printf("GB init error: %d", ret);
