@@ -7,6 +7,23 @@
 #include <TFT_eSPI.h>
 #include <LittleFS.h>
 #include <driver/i2s.h>
+#include <esp_partition.h>
+
+// print peta partisi asli dari firmware yang lagi jalan -- biar gak
+// nebak-nebak offset buat flash littlefs.bin manual
+void print_partition_table() {
+  Serial.println("=== PARTITION TABLE ASLI ===");
+  esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY,
+                                                     ESP_PARTITION_SUBTYPE_ANY,
+                                                     NULL);
+  while (it != NULL) {
+    const esp_partition_t *p = esp_partition_get(it);
+    Serial.printf("  %-12s type=%d sub=%d offset=0x%06X size=0x%06X (%u bytes)\n",
+                  p->label, p->type, p->subtype, p->address, p->size, p->size);
+    it = esp_partition_next(it);
+  }
+  Serial.println("============================");
+}
 
 #include "peanut_gb.h" // DMG-only, gak ada mode warna CGB
 
@@ -179,6 +196,8 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println("[1] serial ok");
+
+  print_partition_table();
 
   Serial.printf("[1a] chip rev: %d, cores: %d\n", ESP.getChipRevision(), ESP.getChipCores());
   Serial.printf("[1b] free heap: %u bytes\n", ESP.getFreeHeap());
