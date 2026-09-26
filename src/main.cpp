@@ -1,0 +1,230 @@
+// ESP32-S3 (N16R8) GB/GBC Emulator
+// TFT ST7789 240x135 + I2S MAX98357A + joystick tactile
+// ROM dibaca dari LittleFS -> /game.gb
+
+#include <Arduino.h>
+#include <SPI.h>
+#include <TFT_eSPI.h>
+#include <LittleFS.h>
+#include <driver/i2s.h>
+
+// warna CGB off dulu, default grayscale
+// #define PEANUT_GB_12_COLOUR 1
+
+#include "peanut_gb.h"
+
+// ---------- pin config ----------
+// pin TFT ada di platformio.ini
+
+//pin module MAX
+#define PIN_I2S_BCLK    4
+#define PIN_I2S_LRC     5
+#define PIN_I2S_DOUT    6
+#define PIN_I2S_SD      7
+
+//pin joystick tacticle switch 
+#define PIN_BTN_UP      1
+#define PIN_BTN_DOWN    2
+#define PIN_BTN_LEFT    3
+#define PIN_BTN_RIGHT   8
+#define PIN_BTN_A       17
+#define PIN_BTN_B       18
+#define PIN_BTN_START   21
+#define PIN_BTN_SELECT  38
+
+#define ROM_FILENAME    "/game.gb"
+
+// ---------- display / letterbox ----------
+#define GB_WIDTH        160
+#define GB_HEIGHT       144
+#define SCREEN_WIDTH    240
+#define SCREEN_HEIGHT   135
+
+constexpr int DIFF_X   = SCREEN_WIDTH  - GB_WIDTH;
+constexpr int DIFF_Y   = SCREEN_HEIGHT - GB_HEIGHT;
+constexpr int OFFSET_X = DIFF_X / 2;
+constexpr int CROP_Y_TOTAL = (DIFF_Y < 0) ? -DIFF_Y : 0;
+constexpr int CROP_Y_TOP   = CROP_Y_TOTAL / 2;
+constexpr int CROP_Y_BOTTOM= CROP_Y_TOTAL - CROP_Y_TOP;
+constexpr int OFFSET_Y = (DIFF_Y > 0) ? (DIFF_Y / 2) : 0;
+
+TFT_eSPI tft = TFT_eSPI();
+
+struct gb_s gb;
+uint8_t *rom = nullptr;
+uint8_t cart_ram[32 * 1024];
+
+int16_t audio_buf[2][735];
+
+// ---------- audio ----------
+void audio_init() {
+  pinMode(PIN_I2S_SD, OUTPUT);
+  digitalWrite(PIN_I2S_SD, HIGH);
+
+  i2s_config_t i2s_config = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+    .sample_rate = 32768,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 4,
+    .dma_buf_len = 256,
+    .use_apll = false
+  };
+
+  i2s_pin_config_t pin_config = {
+    .bck_io_num = PIN_I2S_BCLK,
+    .ws_io_num = PIN_I2S_LRC,
+    .data_out_num = PIN_I2S_DOUT,
+    .data_in_num = I2S_PIN_NO_CHANGE
+  };
+
+  i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &pin_config);
+}
+
+void audio_push_frame() {
+  size_t bytes_written;
+  i2s_write(I2S_NUM_0, audio_buf, sizeof(audio_buf), &bytes_written, portMAX_DELAY);
+}
+
+// ---------- joystick ----------
+void joystick_init() {
+  pinMode(PIN_BTN_UP, INPUT_PULLUP);
+  pinMode(PIN_BTN_DOWN, INPUT_PULLUP);
+  pinMode(PIN_BTN_LEFT, INPUT_PULLUP);
+  pinMode(PIN_BTN_RIGHT, INPUT_PULLUP);
+  pinMode(PIN_BTN_A, INPUT_PULLUP);
+  pinMode(PIN_BTN_B, INPUT_PULLUP);
+  pinMode(PIN_BTN_START, INPUT_PULLUP);
+  pinMode(PIN_BTN_SELECT, INPUT_PULLUP);
+}
+
+void joystick_update(struct gb_s *gb) {
+  gb->direct.joypad_bits.up     = digitalRead(PIN_BTN_UP);
+  gb->direct.joypad_bits.down   = digitalRead(PIN_BTN_DOWN);
+  gb->direct.joypad_bits.left   = digitalRead(PIN_BTN_LEFT);
+  gb->direct.joypad_bits.right  = digitalRead(PIN_BTN_RIGHT);
+  gb->direct.joypad_bits.a      = digitalRead(PIN_BTN_A);
+  gb->direct.joypad_bits.b      = digitalRead(PIN_BTN_B);
+  gb->direct.joypad_bits.start  = digitalRead(PIN_BTN_START);
+  gb->direct.joypad_bits.select = digitalRead(PIN_BTN_SELECT);
+}
+
+// ---------- peanut-gb callbacks ----------
+uint8_t gb_rom_read(struct gb_s *gb, const uint_fast32_t addr) {
+  return rom[addr];
+}
+
+uint8_t gb_cart_ram_read(struct gb_s *gb, const uint_fast32_t addr) {
+  return cart_ram[addr];
+}
+
+void gb_cart_ram_write(struct gb_s *gb, const uint_fast32_t addr, const uint8_t val) {
+  cart_ram[addr] = val;
+}
+
+void gb_error(struct gb_s *gb, const enum gb_error_e gb_err, const uint16_t val) {
+  Serial.printf("GB ERROR %d val %d\n", gb_err, val);
+}
+
+void lcd_draw_line(struct gb_s *gb, const uint8_t pixels[160],
+                    const uint_fast8_t line) {
+  if (line < CROP_Y_TOP || line >= (GB_HEIGHT - CROP_Y_BOTTOM)) {
+    return;
+  }
+
+  int16_t screenY = line - CROP_Y_TOP + OFFSET_Y;
+
+  for (uint8_t x = 0; x < GB_WIDTH; x++) {
+    uint16_t color;
+
+#if defined(PEANUT_GB_12_COLOUR) && PEANUT_GB_12_COLOUR
+    uint16_t rgb555 = gb->display.back_fb_lcd[line * GB_WIDTH + x]; // cek nama field sesuai header
+    uint8_t r5 = (rgb555 & 0x1F);
+    uint8_t g5 = (rgb555 >> 5) & 0x1F;
+    uint8_t b5 = (rgb555 >> 10) & 0x1F;
+    color = (r5 << 11) | ((g5 << 1 | (g5 >> 4)) << 5) | b5;
+#else
+    uint8_t shade = pixels[x] & 0x03;
+    switch (shade) {
+      case 0: color = TFT_WHITE; break;
+      case 1: color = TFT_LIGHTGREY; break;
+      case 2: color = TFT_DARKGREY; break;
+      default: color = TFT_BLACK; break;
+    }
+#endif
+
+    tft.drawPixel(OFFSET_X + x, screenY, color);
+  }
+}
+
+// ---------- load rom ----------
+bool load_rom() {
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount gagal!");
+    return false;
+  }
+
+  File romFile = LittleFS.open(ROM_FILENAME, "r");
+  if (!romFile) {
+    Serial.println("ROM file gak ketemu!");
+    return false;
+  }
+
+  size_t romSize = romFile.size();
+  rom = (uint8_t *)ps_malloc(romSize);
+  if (!rom) {
+    Serial.println("Gagal alokasi PSRAM!");
+    romFile.close();
+    return false;
+  }
+
+  romFile.read(rom, romSize);
+  romFile.close();
+
+  Serial.printf("ROM loaded: %d bytes\n", romSize);
+  return true;
+}
+
+// ---------- setup ----------
+void setup() {
+  Serial.begin(115200);
+
+  tft.init();
+  tft.setRotation(1);
+  tft.fillScreen(TFT_BLACK);
+
+  audio_init();
+  joystick_init();
+
+  if (!load_rom()) {
+    tft.setCursor(0, 0);
+    tft.setTextColor(TFT_RED);
+    tft.println("ROM load failed!");
+    while (1) delay(1000);
+  }
+
+  enum gb_init_error_e ret = gb_init(&gb, &gb_rom_read, &gb_cart_ram_read,
+                                      &gb_cart_ram_write, &gb_error, NULL);
+  if (ret != GB_INIT_NO_ERROR) {
+    Serial.printf("GB init gagal: %d\n", ret);
+    tft.setCursor(0, 0);
+    tft.setTextColor(TFT_RED);
+    tft.printf("GB init error: %d", ret);
+    while (1) delay(1000);
+  }
+
+  gb_init_lcd(&gb, &lcd_draw_line);
+
+  Serial.println("Emulator siap.");
+}
+
+// ---------- loop ----------
+void loop() {
+  joystick_update(&gb);
+  gb_run_frame(&gb);
+
+  // audio_push_frame();
+}

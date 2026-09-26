@@ -1,0 +1,77 @@
+name: Build ESP32-S3 GB Emulator
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      # ambil peanut_gb.h resmi (MIT)
+      - name: Download Peanut-GB core
+        run: |
+          mkdir -p src
+          curl -L -o src/peanut_gb.h https://raw.githubusercontent.com/deltabeard/Peanut-GB/master/peanut_gb.h
+
+      - name: Check ROM exists
+        run: |
+          if [ ! -f "data/game.gb" ]; then
+            echo "::error::data/game.gb gak ketemu! Taruh ROM hasil dump lu sendiri di data/game.gb sebelum push."
+            exit 1
+          fi
+
+      - name: Build firmware
+        run: pio run -e esp32-s3-devkitc-1
+
+      - name: Build filesystem image (ROM)
+        run: pio run -e esp32-s3-devkitc-1 -t buildfs
+
+      - name: Collect flashable files
+        run: |
+          mkdir -p output
+          cp .pio/build/esp32-s3-devkitc-1/firmware.bin output/
+          cp .pio/build/esp32-s3-devkitc-1/bootloader.bin output/
+          cp .pio/build/esp32-s3-devkitc-1/partitions.bin output/
+          cp .pio/build/esp32-s3-devkitc-1/littlefs.bin output/ || cp .pio/build/esp32-s3-devkitc-1/spiffs.bin output/
+          cat > output/FLASH_INSTRUCTIONS.txt << 'EOF'
+          Cara flash ke ESP32-S3:
+
+          Pakai esptool.py (install: pip install esptool), lalu:
+
+          esptool.py --chip esp32s3 --port COMx --baud 921600 write_flash \
+            0x0      bootloader.bin \
+            0x8000   partitions.bin \
+            0x10000  firmware.bin \
+            0x670000 littlefs.bin
+
+          (Sesuaikan offset littlefs.bin dengan partition table default_16MB.csv
+          kalau ternyata beda -- cek file .pio/build/.../partitions.bin
+          atau jalankan `pio run -t erase` dulu kalau mau flash bersih)
+
+          Alternatif paling gampang: pakai PlatformIO langsung dari project ini:
+            pio run -t upload        (flash firmware)
+            pio run -t uploadfs      (flash ROM/filesystem)
+          EOF
+
+      - name: Zip output
+        run: cd output && zip -r ../esp32-gb-emulator-build.zip .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-gb-emulator-build
+          path: esp32-gb-emulator-build.zip

@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+data/*.gb
+data/*.gbc
+!data/README.txt
