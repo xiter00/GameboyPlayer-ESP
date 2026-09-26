@@ -68,6 +68,7 @@ atau `pio run -t upload && pio run -t uploadfs`.
 
 ## 📝 Catatan
 
+- Core-nya **DMG-only**, gak ada mode warna CGB. ROM `.gbc` yang CGB-compatible tetap jalan (grayscale), ROM CGB-only gak akan bisa.
 - ROM **tidak** disertakan — hak cipta pemilik game. Repo public → masukin `data/` ke `.gitignore`.
 - Letterbox/crop layar dihitung otomatis & simetris di `main.cpp`.
 - Audio I2S masih skeleton — sesuaikan API `peanut_gb.h` versi terbaru di `audio_push_frame()`.

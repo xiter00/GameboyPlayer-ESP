@@ -8,21 +8,16 @@
 #include <LittleFS.h>
 #include <driver/i2s.h>
 
-// warna CGB off dulu, default grayscale
-// #define PEANUT_GB_12_COLOUR 1
-
-#include "peanut_gb.h"
+#include "peanut_gb.h" // DMG-only, gak ada mode warna CGB
 
 // ---------- pin config ----------
 // pin TFT ada di platformio.ini
 
-//pin module MAX
 #define PIN_I2S_BCLK    4
 #define PIN_I2S_LRC     5
 #define PIN_I2S_DOUT    6
 #define PIN_I2S_SD      7
 
-//pin joystick tacticle switch 
 #define PIN_BTN_UP      1
 #define PIN_BTN_DOWN    2
 #define PIN_BTN_LEFT    3
@@ -139,14 +134,6 @@ void lcd_draw_line(struct gb_s *gb, const uint8_t pixels[160],
 
   for (uint8_t x = 0; x < GB_WIDTH; x++) {
     uint16_t color;
-
-#if defined(PEANUT_GB_12_COLOUR) && PEANUT_GB_12_COLOUR
-    uint16_t rgb555 = gb->display.back_fb_lcd[line * GB_WIDTH + x]; // cek nama field sesuai header
-    uint8_t r5 = (rgb555 & 0x1F);
-    uint8_t g5 = (rgb555 >> 5) & 0x1F;
-    uint8_t b5 = (rgb555 >> 10) & 0x1F;
-    color = (r5 << 11) | ((g5 << 1 | (g5 >> 4)) << 5) | b5;
-#else
     uint8_t shade = pixels[x] & 0x03;
     switch (shade) {
       case 0: color = TFT_WHITE; break;
@@ -154,7 +141,6 @@ void lcd_draw_line(struct gb_s *gb, const uint8_t pixels[160],
       case 2: color = TFT_DARKGREY; break;
       default: color = TFT_BLACK; break;
     }
-#endif
 
     tft.drawPixel(OFFSET_X + x, screenY, color);
   }
