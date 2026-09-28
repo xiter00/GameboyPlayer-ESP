@@ -28,7 +28,7 @@
 1. taruh ROM      →  data/game.gb
 2. cek pin di src/main.cpp (pin TFT ada di platformio.ini)
 3. push ke GitHub  →  Actions build otomatis
-4. download artifact di tab Actions → flash
+4. download artifact di tab Actions → flash merged-flash.bin di 0x0
 ```
 
 <details>
@@ -40,17 +40,16 @@
 - TFT → `platformio.ini` → `build_flags`
 - Joystick & I2S → `src/main.cpp` → `PIN CONFIGURATION`
 
-**Build** — `build.yml` narik `peanut_gb.h`, compile firmware + filesystem image, zip jadi satu artifact.
+**Build** — `build.yml` narik `peanut_gb.h`, compile firmware + filesystem image, merge jadi satu image.
 
-**Flash**
+**Flash** — artifact berisi `merged-flash.bin` (bootloader + partisi + firmware + ROM jadi satu).
 ```bash
-esptool.py --chip esp32s3 --port COMx --baud 921600 write_flash \
-  0x0      bootloader.bin \
-  0x8000   partitions.bin \
-  0x10000  firmware.bin \
-  0xC90000 littlefs.bin
+esptool.py --chip esp32s3 --port COMx --baud 921600 write_flash 0x0 merged-flash.bin
 ```
-atau `pio run -t upload && pio run -t uploadfs`.
+Update firmware aja (ROM tetap):
+```bash
+esptool.py --chip esp32s3 --port COMx --baud 921600 write_flash 0x10000 firmware.bin
+```
 
 </details>
 

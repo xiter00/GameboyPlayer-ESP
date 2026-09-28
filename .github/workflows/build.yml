@@ -30,7 +30,7 @@ jobs:
       - name: Check ROM exists
         run: |
           if [ ! -f "data/game.gb" ]; then
-            echo "::error::data/game.gb gak ketemu! Taruh ROM hasil dump lu sendiri di data/game.gb sebelum push."
+            echo "::error::data/game.gb gak ketemu! Taruh ROM di data/game.gb sebelum push."
             exit 1
           fi
 
@@ -40,36 +40,62 @@ jobs:
       - name: Build filesystem image (ROM)
         run: pio run -e esp32-s3-devkitc-1 -t buildfs
 
-      - name: Collect flashable files
+      # offset dibaca langsung dari partitions.bin, gak hardcode
+      - name: Merge jadi satu image
         run: |
+          B=.pio/build/esp32-s3-devkitc-1
           mkdir -p output
-          cp .pio/build/esp32-s3-devkitc-1/firmware.bin output/
-          cp .pio/build/esp32-s3-devkitc-1/bootloader.bin output/
-          cp .pio/build/esp32-s3-devkitc-1/partitions.bin output/
-          cp .pio/build/esp32-s3-devkitc-1/littlefs.bin output/ || cp .pio/build/esp32-s3-devkitc-1/spiffs.bin output/
-          cat > output/FLASH_INSTRUCTIONS.txt << 'EOF'
-          Cara flash ke ESP32-S3:
 
-          Pakai esptool.py (install: pip install esptool), lalu:
+          cat > /tmp/part.py << 'PY'
+          import struct, sys
+          want = sys.argv[2]
+          d = open(sys.argv[1], 'rb').read()
+          for i in range(0, len(d), 32):
+              e = d[i:i+32]
+              if e[:2] != b'\xaa\x50':
+                  continue
+              t, s, off, size = struct.unpack('<BBII', e[2:12])
+              if want == 'fs' and t == 1 and s == 0x82:
+                  print(hex(off)); break
+              if want == 'otadata' and t == 1 and s == 0x00:
+                  print(hex(off)); break
+          PY
 
-          esptool.py --chip esp32s3 --port COMx --baud 921600 write_flash \
-            0x0      bootloader.bin \
-            0x8000   partitions.bin \
-            0x10000  firmware.bin \
-            0xC90000 littlefs.bin
+          FS_OFF=$(python3 /tmp/part.py $B/partitions.bin fs)
+          OTA_OFF=$(python3 /tmp/part.py $B/partitions.bin otadata)
+          FS_BIN=$B/littlefs.bin
+          [ -f "$FS_BIN" ] || FS_BIN=$B/spiffs.bin
+          BOOT_APP0=$(find ~/.platformio/packages -name boot_app0.bin | head -n1)
+          ESPTOOL=$(find ~/.platformio/packages/tool-esptoolpy -name esptool.py | head -n1)
 
-          (Offset 0xC90000 sesuai partition table default_16MB.csv (skema OTA:
-          app0 0x10000, app1 0x650000, littlefs/spiffs 0xC90000). Kalau custom
-          partition table, cek ulang lewat `pio run -t uploadfs` yang otomatis
-          pakai offset yang bener, atau baca isi partitions.bin-nya langsung)
+          echo "fs=$FS_OFF otadata=$OTA_OFF boot_app0=$BOOT_APP0"
+          [ -n "$FS_OFF" ] || { echo "::error::partisi filesystem gak ketemu di partitions.bin"; exit 1; }
 
-          Alternatif paling gampang: pakai PlatformIO langsung dari project ini:
-            pio run -t upload        (flash firmware)
-            pio run -t uploadfs      (flash ROM/filesystem)
+          ARGS="0x0 $B/bootloader.bin 0x8000 $B/partitions.bin"
+          if [ -n "$OTA_OFF" ] && [ -n "$BOOT_APP0" ]; then
+            ARGS="$ARGS $OTA_OFF $BOOT_APP0"
+          fi
+          ARGS="$ARGS 0x10000 $B/firmware.bin $FS_OFF $FS_BIN"
+
+          python3 "$ESPTOOL" --chip esp32s3 merge_bin -o output/merged-flash.bin $ARGS
+
+          cp $B/firmware.bin output/
+          cp $FS_BIN output/littlefs.bin
+
+          cat > output/FLASH.txt << EOF
+          Flash penuh (bootloader + partisi + firmware + ROM), 1 file:
+
+            esptool.py --chip esp32s3 --port COMx --baud 921600 write_flash 0x0 merged-flash.bin
+
+          Update firmware aja (ROM tetap):
+
+            esptool.py --chip esp32s3 --port COMx --baud 921600 write_flash 0x10000 firmware.bin
+
+          Offset littlefs di build ini: $FS_OFF
           EOF
 
       - name: Zip output
-        run: cd output && zip -r ../esp32-gb-emulator-build.zip .
+        run: cd output && zip -9 -r ../esp32-gb-emulator-build.zip .
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
